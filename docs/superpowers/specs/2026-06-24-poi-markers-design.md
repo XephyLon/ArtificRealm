@@ -79,15 +79,9 @@ Full seed dataset (54 entries, slug-keyed):
 
 (Classification is best-effort from naming/context — easy to tweak Type per-entry later without any structural change.)
 
-### New Continent level-gate (reuses existing FogRegions, no new mechanism)
+### New Continent level-gate (reuses existing FogRegions entry, no new data needed)
 
-One new seeded `World.FogRegions` entry alongside the existing defaults:
-
-```js
-{ Name: 'New Continent (unlocks at Lv.70)', X: -400, Y: -150, W: 200, H: 350, MinLevel: 70, Revealed: false }
-```
-
-Bounding box covers every New Continent POI (`X:[-400,-200]`) with margin; no Old Continent POI falls inside `X < -200` (closest is Pandemonium City at `X:-170`), so the gate can't accidentally hide Old Continent content. POI markers run through the existing `isPointFogged()` check — same function `MapPins`/`World_Calc` pins already use — so no new gating code path needed.
+`DEFAULT_FOG_REGIONS` already seeds a `new_continent` region — `{ Name: 'New Continent', X: -400, Y: -100, W: 250, H: 250, MinLevel: 70 }`, i.e. `X:[-400,-150]`, `Y:[-100,150]`. The actual New Continent POI bounding box (computed from the table below) is `X:[-390,-210]`, `Y:[-80,140]` — fully inside the existing rectangle, and no Old Continent POI falls inside `X < -150` (closest is Pandemonium City at `X:-170`). So this needs zero new fog-region data — POI markers just run through the existing `isPointFogged()` check, same as `MapPins`/`World_Calc` pins, and the existing seeded region does the gating already.
 
 ### `Familiar.*` member coordinates
 
