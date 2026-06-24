@@ -79,13 +79,13 @@ Full seed dataset (54 entries, slug-keyed):
 
 (Classification is best-effort from naming/context — easy to tweak Type per-entry later without any structural change.)
 
-### New Continent level-gate (reuses existing FogRegions entry, no new data needed)
+### New Continent level-gate (reuses existing FogRegions entry, one boundary fix needed)
 
-`DEFAULT_FOG_REGIONS` already seeds a `new_continent` region — `{ Name: 'New Continent', X: -400, Y: -100, W: 250, H: 250, MinLevel: 70 }`, i.e. `X:[-400,-150]`, `Y:[-100,150]`. The actual New Continent POI bounding box (computed from the table below) is `X:[-390,-210]`, `Y:[-80,140]` — fully inside the existing rectangle, and no Old Continent POI falls inside `X < -150` (closest is Pandemonium City at `X:-170`). So this needs zero new fog-region data — POI markers just run through the existing `isPointFogged()` check, same as `MapPins`/`World_Calc` pins, and the existing seeded region does the gating already.
+`DEFAULT_FOG_REGIONS` already seeds a `new_continent` region — `{ Name: 'New Continent', X: -400, Y: -100, W: 250, H: 250, MinLevel: 70 }`, i.e. `X:[-400,-150]`, `Y:[-100,150]`. The actual New Continent POI bounding box (from the table below) is `X:[-390,-210]`, `Y:[-80,140]` — fits inside the Y range, but the X upper bound of `-150` is too loose: it also catches Pandemonium City (`X:-170`), an Old Continent "special" location, since `-170` falls inside `[-400,-150]`. Fix: narrow `new_continent.W` from `250` to `200`, moving the upper X bound to `-200` — still covers every New Continent POI (max `X:-210` ≤ `-200`) while excluding Pandemonium (`-170 > -200`) and every other Old Continent POI (next-closest is `X:-120`). POI markers otherwise just run through the existing `isPointFogged()` check, same as `MapPins`/`World_Calc` pins — no new gating code path.
 
 ### `Familiar.*` member coordinates
 
-Add two plain (non-tuple) fields to `familiarMemberSchema` (card zod schema) and the corresponding StatusMenu rendering: `X`, `Y` (numbers, default `0`). Used to mark a member's location separately from `World.PartyPosition` — including the case where a member is in the same place as another but `Is_present: false` (not in the current scene), or off somewhere else entirely. The AI/user sets these like any other stat field when a member splits off.
+Add two plain (non-tuple) fields to `familiarMemberSchema` (card zod schema) and the corresponding StatusMenu rendering: `X`, `Y` (numbers, **optional, no default** — deliberately not `.prefault(0)` like the rest of this schema, since `(0,0)` is the Old Continent's real origin point and every other numeric field's "0 until set" convention would falsely cluster every untouched party member there). Used to mark a member's location separately from `World.PartyPosition` — including the case where a member is in the same place as another but `Is_present: false` (not in the current scene), or off somewhere else entirely. The AI/user sets these like any other stat field when a member splits off; the member layer (§3) only renders a marker once both `X` and `Y` are actually present.
 
 ## 2. Card schema changes (`tavern_helper` "Scheme" script)
 
@@ -115,7 +115,7 @@ This mirrors the fix already applied for the original map fields — anything ne
 
 ## 4. Testing
 
-- Manual/headless render check: seed a fresh `stat_data` (no `World` key), call `updateMapPanel`, confirm `World.PointsOfInterest` and the new FogRegion get seeded, all 54 POI markers appear (28 visible, 26 fogged when `Mainchar.Level < 70`; all 54 visible at `Level >= 70`).
+- Manual/headless render check: seed a fresh `stat_data` (no `World` key), call `updateMapPanel`, confirm `World.PointsOfInterest` gets seeded and `new_continent`'s `W` is `200`, all 54 POI markers appear (35 visible, 19 fogged — the New Continent set — when `Mainchar.Level < 70`; all 54 visible at `Level >= 70`).
 - Confirm a POI marker click opens a read-only modal (no save/delete buttons).
 - Confirm two `Familiar` entries with identical `X`/`Y` render as one grouped marker with both names in the tooltip; differing coordinates render as separate markers.
 - Confirm card's zod schema round-trips `World.PointsOfInterest` and `Familiar.*.X/Y` without stripping (the original map-fields bug).
