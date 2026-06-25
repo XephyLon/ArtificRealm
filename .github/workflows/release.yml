@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run tests
+        run: node --test tests/*.test.mjs
+
+      - name: Extract version and changelog notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! grep -qF "## [$VERSION]" CHANGELOG.md; then
+            echo "No CHANGELOG.md entry for version $VERSION (tag $GITHUB_REF_NAME)." >&2
+            exit 1
+          fi
+          awk -v ver="## [$VERSION]" '
+            index($0, ver) == 1 { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: v${{ steps.notes.outputs.version }}
+          body_path: /tmp/release-notes.md
+          files: |
+            CharacterCard/ArtificRealm_eng-1.01.png
+            src/ArtificRealm創世域_Eng.json
