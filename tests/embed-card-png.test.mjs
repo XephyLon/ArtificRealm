@@ -34,16 +34,68 @@ test('embedCardIntoPng output is still a valid PNG (signature + IEND intact)', (
     assert.ok(png.subarray(png.length - 8, png.length - 4).toString('ascii') === 'IEND');
 });
 
-test('embedCardIntoPng replaces a pre-existing chara chunk rather than appending a second one', () => {
+test('embedCardIntoPng replaces pre-existing chara/ccv3 chunks rather than appending duplicates', () => {
     const oldCard = { name: 'Old' };
     const newCard = { name: 'New' };
     const withOld = embedCardIntoPng(blankPng(), oldCard);
     const withNew = embedCardIntoPng(withOld, newCard);
     assert.deepEqual(extractCardFromPng(withNew), newCard);
-    // Only one "chara" tEXt chunk should remain.
-    const occurrences = withNew.toString('latin1').split('chara\0').length - 1;
-    assert.equal(occurrences, 1);
+    // Exactly one "chara" and one "ccv3" tEXt chunk should remain.
+    const text = withNew.toString('latin1');
+    assert.equal(text.split('chara\0').length - 1, 1);
+    assert.equal(text.split('ccv3\0').length - 1, 1);
 });
+
+test('embedCardIntoPng writes ccv3 in addition to chara, and extractCardFromPng prefers ccv3', () => {
+    const png = embedCardIntoPng(blankPng(), { name: 'Synced' });
+    const text = png.toString('latin1');
+    assert.ok(text.includes('chara\0'));
+    assert.ok(text.includes('ccv3\0'));
+    assert.deepEqual(extractCardFromPng(png), { name: 'Synced' });
+});
+
+test('extractCardFromPng prefers a ccv3 chunk over a divergent chara chunk', () => {
+    // SillyTavern reads "ccv3" in preference to "chara" when both are present.
+    // Build a PNG by hand with mismatched chunks to prove we match that
+    // precedence — this is the exact bug this tool exists to avoid
+    // reintroducing (a base PNG whose stale "ccv3" silently wins).
+    const png = pngWithRawTextChunks(blankPng(), [
+        ['ccv3', { name: 'Fresh-ccv3' }],
+        ['chara', { name: 'Stale-chara' }],
+    ]);
+    assert.deepEqual(extractCardFromPng(png), { name: 'Fresh-ccv3' });
+});
+
+function crc32(buf) {
+    let c = 0xffffffff;
+    for (let i = 0; i < buf.length; i++) {
+        c = c ^ buf[i];
+        for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    return (c ^ 0xffffffff) >>> 0;
+}
+
+function rawChunk(type, data) {
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length, 0);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body), 0);
+    return Buffer.concat([length, body, crc]);
+}
+
+/** Test-only: inserts raw tEXt chunks with arbitrary (possibly mismatched) JSON before IEND. */
+function pngWithRawTextChunks(basePng, entries) {
+    const iendIndex = basePng.lastIndexOf(Buffer.from('IEND', 'ascii')) - 4;
+    const before = basePng.subarray(0, iendIndex);
+    const iendAndAfter = basePng.subarray(iendIndex);
+    const textChunks = entries.map(([keyword, json]) => {
+        const base64 = Buffer.from(JSON.stringify(json), 'utf-8').toString('base64');
+        const data = Buffer.concat([Buffer.from(`${keyword}\0`, 'ascii'), Buffer.from(base64, 'ascii')]);
+        return rawChunk('tEXt', data);
+    });
+    return Buffer.concat([before, ...textChunks, iendAndAfter]);
+}
 
 test('embedCardIntoPng preserves unrelated chunks (e.g. IHDR) byte-for-byte', () => {
     const base = blankPng();

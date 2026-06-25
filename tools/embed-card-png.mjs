@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 /**
- * Embeds the canonical character-card JSON directly into a PNG as a
- * "chara" tEXt chunk (the standard SillyTavern card-PNG format) with no
- * merging, no template, no field stripping. Also bumps data.character_version
- * in the source JSON and logs the export to CHANGELOG.md and
- * CharacterCard/export-history.jsonl.
+ * Embeds the canonical character-card JSON directly into a PNG as both
+ * "chara" (v2 spec) and "ccv3" (chara_card_v3 spec) tEXt chunks with no
+ * merging, no template, no field stripping. SillyTavern reads "ccv3" in
+ * preference to "chara" when both are present — a base PNG that already
+ * carries a stale "ccv3" chunk from an earlier export will silently win
+ * over a freshly-written "chara" chunk unless both are kept in sync, which
+ * is exactly what happened the first time this tool shipped (only "chara"
+ * was rewritten, so ST kept reading the old "ccv3" data). Also bumps
+ * data.character_version in the source JSON and logs the export to
+ * CHANGELOG.md and CharacterCard/export-history.jsonl.
  *
  * Why this exists: MVU_Game_Maker (~/MVU_Game_Maker) always merges an
  * uploaded card onto one of its two bundled templates. Any regex_script
@@ -80,46 +85,50 @@ function buildChunk(type, data) {
     return Buffer.concat([length, body, crc]);
 }
 
-function buildCharaTextChunk(cardJson) {
+const CARD_KEYWORDS = ['chara', 'ccv3'];
+
+function buildCardTextChunk(keyword, cardJson) {
     const json = JSON.stringify(cardJson);
     const base64 = Buffer.from(json, 'utf-8').toString('base64');
     // tEXt chunk format: keyword + 0x00 + text
-    const data = Buffer.concat([Buffer.from('chara\0', 'ascii'), Buffer.from(base64, 'ascii')]);
+    const data = Buffer.concat([Buffer.from(`${keyword}\0`, 'ascii'), Buffer.from(base64, 'ascii')]);
     return buildChunk('tEXt', data);
 }
 
-function isCharaTextChunk(chunk) {
-    if (chunk.type !== 'tEXt') return false;
+function textChunkKeyword(chunk) {
+    if (chunk.type !== 'tEXt') return null;
     const nul = chunk.data.indexOf(0);
-    if (nul === -1) return false;
-    return chunk.data.subarray(0, nul).toString('ascii') === 'chara';
+    if (nul === -1) return null;
+    return chunk.data.subarray(0, nul).toString('ascii');
 }
 
-/** Removes any existing "chara" tEXt chunks and inserts a fresh one before IEND. */
+/** Removes any existing "chara"/"ccv3" tEXt chunks and inserts fresh ones (both, in sync) before IEND. */
 export function embedCardIntoPng(pngBuffer, cardJson) {
     const chunks = parsePngChunks(pngBuffer);
-    const kept = chunks.filter((c) => c.type === 'IEND' || !isCharaTextChunk(c));
-    const newChara = buildCharaTextChunk(cardJson);
+    const kept = chunks.filter((c) => c.type === 'IEND' || !CARD_KEYWORDS.includes(textChunkKeyword(c)));
 
     const parts = [PNG_SIGNATURE];
     for (const chunk of kept) {
         if (chunk.type === 'IEND') {
-            parts.push(newChara);
+            for (const keyword of CARD_KEYWORDS) parts.push(buildCardTextChunk(keyword, cardJson));
         }
         parts.push(buildChunk(chunk.type, chunk.data));
     }
     return Buffer.concat(parts);
 }
 
-/** Reads the embedded "chara" tEXt chunk back out as a parsed JSON object, or null if absent. */
+/** Reads the embedded card back out as a parsed JSON object, preferring "ccv3" over "chara" (matches SillyTavern's own precedence), or null if neither is present. */
 export function extractCardFromPng(pngBuffer) {
     const chunks = parsePngChunks(pngBuffer);
-    const chara = chunks.find(isCharaTextChunk);
-    if (!chara) return null;
-    const nul = chara.data.indexOf(0);
-    const base64 = chara.data.subarray(nul + 1).toString('ascii');
-    const json = Buffer.from(base64, 'base64').toString('utf-8');
-    return JSON.parse(json);
+    for (const keyword of ['ccv3', 'chara']) {
+        const chunk = chunks.find((c) => textChunkKeyword(c) === keyword);
+        if (!chunk) continue;
+        const nul = chunk.data.indexOf(0);
+        const base64 = chunk.data.subarray(nul + 1).toString('ascii');
+        const json = Buffer.from(base64, 'base64').toString('utf-8');
+        return JSON.parse(json);
+    }
+    return null;
 }
 
 /** Bumps an "X.Y" version string by 0.01 (e.g. "1.00" -> "1.01"). Unparseable input starts at "1.00". */
