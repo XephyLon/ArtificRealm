@@ -18,14 +18,16 @@ function loadMapCommandsHarness(initialStat) {
     structuredClone,
     setTimeout,
     window: {},
-    SlashCommand: {
-      fromProps(props) {
-        return props;
+    SillyTavern: {
+      SlashCommand: {
+        fromProps(props) {
+          return props;
+        },
       },
-    },
-    SlashCommandParser: {
-      addCommandObject(command) {
-        commands.set(command.name, command);
+      SlashCommandParser: {
+        addCommandObject(command) {
+          commands.set(command.name, command);
+        },
       },
     },
     getVariables(options) {
