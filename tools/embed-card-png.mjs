@@ -2,7 +2,9 @@
 /**
  * Embeds the canonical character-card JSON directly into a PNG as a
  * "chara" tEXt chunk (the standard SillyTavern card-PNG format) with no
- * merging, no template, no field stripping.
+ * merging, no template, no field stripping. Also bumps data.character_version
+ * in the source JSON and logs the export to CHANGELOG.md and
+ * CharacterCard/export-history.jsonl.
  *
  * Why this exists: MVU_Game_Maker (~/MVU_Game_Maker) always merges an
  * uploaded card onto one of its two bundled templates. Any regex_script
@@ -12,16 +14,19 @@
  * verbatim into a PNG, done.
  *
  * Usage:
- *   node tools/embed-card-png.mjs [--json <path>] [--base-png <path>] [--out <path>]
+ *   node tools/embed-card-png.mjs [--json <path>] [--base-png <path>] [--out <path>] [--version <X.Y>] [--note "..."]
  *
  * Defaults (run with no args to regenerate the canonical card PNG in place):
  *   --json      src/ArtificRealm創世域_Eng.json
  *   --base-png  CharacterCard/ArtificRealm_eng-1.01.png
  *   --out       (same as --base-png)
+ *   --version   auto-bump current data.character_version by 0.01
+ *   --note      "" (recorded in CHANGELOG.md and the export history log)
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -117,13 +122,36 @@ export function extractCardFromPng(pngBuffer) {
     return JSON.parse(json);
 }
 
+/** Bumps an "X.Y" version string by 0.01 (e.g. "1.00" -> "1.01"). Unparseable input starts at "1.00". */
+export function bumpVersion(current) {
+    const parsed = typeof current === 'string' ? parseFloat(current) : NaN;
+    const next = Number.isFinite(parsed) ? parsed + 0.01 : 1.0;
+    return next.toFixed(2);
+}
+
+/** Prepends a "## [version] - date" entry (with note) to CHANGELOG.md, creating it if absent. */
+export function appendChangelogEntry(changelogPath, { version, date, note }) {
+    const header = '# Changelog\n\n';
+    const entry = `## [${version}] - ${date}\n\n- ${note || 'No note provided.'}\n\n`;
+    const existing = existsSync(changelogPath) ? readFileSync(changelogPath, 'utf-8') : header;
+    const body = existing.startsWith(header) ? existing.slice(header.length) : existing;
+    writeFileSync(changelogPath, header + entry + body);
+}
+
+/** Appends one JSON line per export to the history log, creating it if absent. */
+export function appendExportHistoryEntry(historyPath, entry) {
+    appendFileSync(historyPath, JSON.stringify(entry) + '\n');
+}
+
 function parseArgs(argv) {
-    const args = { json: null, basePng: null, out: null };
+    const args = { json: null, basePng: null, out: null, version: null, note: '' };
     for (let i = 0; i < argv.length; i++) {
         const arg = argv[i];
         if (arg === '--json') args.json = argv[++i];
         else if (arg === '--base-png') args.basePng = argv[++i];
         else if (arg === '--out') args.out = argv[++i];
+        else if (arg === '--version') args.version = argv[++i];
+        else if (arg === '--note') args.note = argv[++i];
         else throw new Error(`Unknown argument: ${arg}`);
     }
     return args;
@@ -134,13 +162,33 @@ function main() {
     const jsonPath = args.json ?? path.join(REPO_ROOT, 'src', 'ArtificRealm創世域_Eng.json');
     const basePngPath = args.basePng ?? path.join(REPO_ROOT, 'CharacterCard', 'ArtificRealm_eng-1.01.png');
     const outPath = args.out ?? basePngPath;
+    const changelogPath = path.join(REPO_ROOT, 'CHANGELOG.md');
+    const historyPath = path.join(REPO_ROOT, 'CharacterCard', 'export-history.jsonl');
 
     const cardJson = JSON.parse(readFileSync(jsonPath, 'utf-8'));
+    const previousVersion = cardJson.data?.character_version ?? '';
+    const version = args.version ?? bumpVersion(previousVersion);
+    if (cardJson.data) cardJson.data.character_version = version;
+
     const basePng = readFileSync(basePngPath);
     const outPng = embedCardIntoPng(basePng, cardJson);
+
+    writeFileSync(jsonPath, JSON.stringify(cardJson, null, 2));
     writeFileSync(outPath, outPng);
 
-    console.log(`Embedded ${jsonPath} into ${outPath} (${outPng.length} bytes)`);
+    const date = new Date().toISOString().slice(0, 10);
+    appendChangelogEntry(changelogPath, { version, date, note: args.note });
+    appendExportHistoryEntry(historyPath, {
+        version,
+        previousVersion,
+        date,
+        note: args.note,
+        jsonPath: path.relative(REPO_ROOT, jsonPath),
+        outPath: path.relative(REPO_ROOT, outPath),
+        sha256: createHash('sha256').update(outPng).digest('hex'),
+    });
+
+    console.log(`Embedded ${jsonPath} (v${version}) into ${outPath} (${outPng.length} bytes)`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
